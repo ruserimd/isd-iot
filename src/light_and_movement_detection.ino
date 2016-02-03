@@ -36,14 +36,14 @@ void loop(){
     digitalWrite(13,LOW);
   }
 
-  // Check if light is on or of
+  // Check if light is on or off.
   if(LightSensor_Read(LightSensor_address)==2){    
    valf=((buff[0]<<8)|buff[1])/1.2;
 
    if(valf>10) {
      Serial.println("Light is on.");
      digitalWrite(lightLedPin,HIGH);      
-   } else if (valf<=0) {
+   } else {
      Serial.println("Light is off.");
      digitalWrite(lightLedPin,LOW);
     }
