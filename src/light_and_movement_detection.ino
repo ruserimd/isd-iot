@@ -1,81 +1,91 @@
 #include <Wire.h>
+#include <avr/sleep.h>  
+#include "TimerOne.h"
+#include "BH1750.h"
 
-int LightSensor_address = 0x23; // i2c Addresse
-byte buff[2];
+#define lightLedPin 12
+#define motionLedPin 13
+#define pirPin 2
 
-int lightLedPin = 12;
-int motionLedPin = 13;
+BH1750 lightMeter;
 
-void setup(){
-  
+byte light_FLAG = 0;
+byte motion_FLAG = 0;
+
+void setup(){  
   Wire.begin();
-  LightSensor_Init(LightSensor_address);
   
   delay(200);
   Serial.begin(9600);
-  Serial.println("Light Sensor Started");
-  Serial.println("Motion Sensor Started");
 
   // Set input & output pin for movement detection.
   pinMode(motionLedPin,OUTPUT);
-  pinMode(2,INPUT);
+  pinMode(pirPin,INPUT);
 
   // Set output pin for light detection.
   pinMode(lightLedPin,OUTPUT);
+  
+  attachInterrupt(digitalPinToInterrupt(2), motionWakeUp, CHANGE);
+
+  Timer1.initialize(500000);       
+  Timer1.attachInterrupt(lightWakeUp); 
+  
+  Serial.println("Light Sensor Started");
+  Serial.println("Motion Sensor Started");
+  delay(50);
+
+  lightMeter.begin();
 }
 
-void loop(){
-   
-  float valf=0;
-
-  // Check if movement is detected.
-  if (digitalRead(2)==1){
-    Serial.println("Movement detected.");
-    digitalWrite(13,digitalRead(2));
-    delay(1000);
-    digitalWrite(13,LOW);
+void loop(){  
+  if (motion_FLAG == 1) {
+    digitalWrite(motionLedPin, digitalRead(2));
+    motion_FLAG = 0;    
   }
-
-  // Check if light is on or off.
-  if(LightSensor_Read(LightSensor_address)==2){    
-   valf=((buff[0]<<8)|buff[1])/1.2;
-
-   if(valf>10) {
-     Serial.println("Light is on.");
-     digitalWrite(lightLedPin,HIGH);      
-   } else {
-     Serial.println("Light is off.");
-     digitalWrite(lightLedPin,LOW);
+  
+  if (light_FLAG == 1) {
+    if (lightMeter.readLightLevel()>5) {
+      digitalWrite(lightLedPin, LOW);
+      delay(2000);
+      digitalWrite(lightLedPin, HIGH);
+      light_FLAG = 0;
+    } else if (lightMeter.readLightLevel()<5) {      
+      digitalWrite(lightLedPin, LOW);
+      light_FLAG = 0;
     }
   }
-  delay(1000);
+  
+  sleepNow();
 }
 
-/* Begin a transmission to the I2C slave device with the given address. 
- * Subsequently, queue bytes for transmission with the write() function 
- * and transmit them by calling endTransmission(). 
- * address: the 7-bit address of the device to transmit to
+/*
+ * Set the light_FLAG to 1 when the interruption for the LIGHT sensor was produced. 
  */
-void LightSensor_Init(int address){
-  
-  Wire.beginTransmission(address);
-  Wire.write(0x10); // 1 [lux] aufloesung
-  Wire.endTransmission();
+void lightWakeUp()
+{
+  light_FLAG = 1; 
 }
 
-/* Used by the master (Arduino) to request data (bytes) from a slave device (Light Sensor). 
- * address: the 7-bit address of the device to transmit to
- * return: the number of bytes returned from the slave device 
+/*
+ * Set motion_FLAG to 1 when the interruption for the PIR sensor was produced.
  */
-byte LightSensor_Read(int address){
-  
-  byte i=0;
-  Wire.beginTransmission(address);
-  Wire.requestFrom(address, 2);
-  while(Wire.available()){
-    buff[i] = Wire.read(); 
-    i++;
-  }
-  Wire.endTransmission();  
-  return i;
+void motionWakeUp(){
+  motion_FLAG = 1;
 }
+
+/*
+ * Sleep Arduino to use less power. In the Atmega8 datasheet
+ * http://www.atmel.com/dyn/resources/prod_documents/doc2486.pdf on page 35
+ * there is a list of sleep modes which explains which clocks and
+ * wake up sources are available in which sleep mode.
+ */
+void sleepNow() {  
+  set_sleep_mode(SLEEP_MODE_IDLE);                                 // Sleep mode is set here.  
+  sleep_enable();                                                  // Enables the sleep bit in the mcucr register.  
+  attachInterrupt(digitalPinToInterrupt(2), motionWakeUp, CHANGE); // Use interrupt pin 2 and run function. 
+  Timer1.attachInterrupt(lightWakeUp); 
+  sleep_mode();                                                     
+  
+  sleep_disable();                                                 // First thing after waking from sleep: disable sleep.  
+  detachInterrupt(digitalPinToInterrupt(2));                       // Disables interrupt on pin 2 so the wakeUp code will not be executed during normal running time.  
+}  
