@@ -6,6 +6,7 @@
 #define lightLedPin 12
 #define motionLedPin 13
 #define pirPin 2
+#define calibrationTime 10
 
 BH1750 lightMeter;
 
@@ -29,12 +30,19 @@ void setup(){
 
   Timer1.initialize(500000);       
   Timer1.attachInterrupt(lightWakeUp); 
-  
-  Serial.println("Light Sensor Started");
-  Serial.println("Motion Sensor Started");
-  delay(50);
 
   lightMeter.begin();
+
+  // Give the sensor some time to calibrate.
+  Serial.print("Calibrating sensor ");
+    for(int i = 0; i < calibrationTime; i++){
+      Serial.print(".");
+      delay(1000);
+      }
+  Serial.println();
+  Serial.println("Light Sensor Started");
+  Serial.println("Motion Sensor Started");
+  delay(50);  
 }
 
 void loop(){  
