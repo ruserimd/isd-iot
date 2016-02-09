@@ -9,10 +9,10 @@
 #define motionLedPin 9
 #define pirPin 2
 #define pirSensorCalibrationTime 10  // Calibration time for PIR sensor, 10-60ms according to datasheet.
-#define lightTimerCounter 10         // After how many timer interruptions the led will blink.
+#define lightTimerCounter 10         // After how many timer interruptions the led will blink. 0.5 x 10 = 5s.
 #define motionPause 5000             // The amount of milliseconds the PIR sensor has to be low 
                                      // before we assume all motion has stopped.
-#define HBInterval 5                 // Send control message after 5s.
+#define HBInterval 5                 // Send control message after 5 x 5s = 25s.
 
 BH1750 lightMeter;
 
@@ -20,7 +20,7 @@ byte light_FLAG = 0;
 byte motion_FLAG = 0;
 byte lightTurnedOff = 0;
 byte HBTimerCounter = 0;
-byte light = 0;
+byte firstMessageToServer = 0;
 
 // The MAC address and IP address for the controller. They will be dependent on local network.
 byte mac[] = { 0x90, 0xA2, 0xDA, 0x0F, 0xB6, 0x47 };
@@ -39,7 +39,7 @@ boolean lockLow = true;
 boolean takeLowTime;   
 
 void setup(){    
-  delay(200);
+  delay(200L);
   Serial.begin(9600);
 
   setupPins();
@@ -47,21 +47,40 @@ void setup(){
   lightMeter.begin();
   calibratePIRSensor();
   setupEthernet();
+  bootIndicator();
   
   Serial.println();
   Serial.println("Light Sensor Started");
   Serial.println("Motion Sensor Started");
   Serial.println("Ethernet Started");
-  delay(50); 
+  delay(50L); 
 }
 
+/*
+ * Give the sensor some time to calibrate. 10-60ms according to datasheet.
+ */
 void calibratePIRSensor() {
-  // Give the sensor some time to calibrate.
   Serial.print("Calibrating sensor ");
   for(int i = 0; i < pirSensorCalibrationTime; i++){
     Serial.print(".");
-    delay(1000);
+    delay(1000L);
   }
+}
+
+/*
+ *  At bootup, flash LED 3 times quick so I know the reboot has occurred.
+ */
+void bootIndicator() {
+  for (byte k = 1; k <= 3; k = k + 1) {
+    digitalWrite(lightLedPin, HIGH);
+    digitalWrite(motionLedPin, HIGH);
+    delay(250L);
+    digitalWrite(lightLedPin, LOW);
+    digitalWrite(motionLedPin, LOW);
+    delay(250L);
+  }
+  // Delay a bit more so it is clear we are done with setup.
+  delay(750L);
 }
 
 void setupPins() {
@@ -82,6 +101,9 @@ void setupInterruptions() {
   Timer1.attachInterrupt(lightWakeUp); 
 }
 
+/*
+ * Setup device's IP, MAC and local port.
+ */
 void setupEthernet() {
   if (Ethernet.begin(mac) == 0) {
     Serial.println("Failed to configure Ethernet using DHCP");
@@ -92,24 +114,29 @@ void setupEthernet() {
   Udp.begin(localPort);
 
   // Ethernet Shield IP.
+  Serial.println();
   Serial.print("Device IP : ");
   Serial.println(Ethernet.localIP());
 }
 
 void loop(){    
+
+  sendTheFirstData();
+
+  // Check for motion detection.
   if (motion_FLAG == 1) {   
     if(digitalRead(pirPin) == HIGH){
      digitalWrite(motionLedPin, HIGH); // The led visualizes the sensors output pin state.
      
-    if(lockLow){  
-     lockLow = false;              // Makes sure we wait for a transition to LOW before any further output is made.            
-     String motionValue = String(motion_FLAG); 
-     String lightValue = String(lightMeter.readLightLevel());
-     sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
-     HBTimerCounter = 0;           // Reset HB timer. 
-     delay(50);
-    }         
-    takeLowTime = true;
+      if(lockLow){  
+       lockLow = false;                 // Makes sure we wait for a transition to LOW before any further output is made.            
+       String motionValue = String(motion_FLAG); 
+       String lightValue = String(lightMeter.readLightLevel());
+       sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
+       HBTimerCounter = 0;             // Reset HB timer. 
+       delay(50L);
+      }         
+      takeLowTime = true;
     }
     
     if(digitalRead(pirPin) == LOW){       
@@ -130,37 +157,26 @@ void loop(){
        String motionValue = String(motion_FLAG); 
        String lightValue = String(lightMeter.readLightLevel());
        sendUDP("P", motionValue, "L", lightValue, "H", String(1));  
-       delay(50);
+       delay(50L);
       }
     }
   }
-  
+
+  // Check for light detection.
   if (light_FLAG > lightTimerCounter) {
     if (lightMeter.readLightLevel()>5) {           // Light is on.
       digitalWrite(lightLedPin, HIGH);
-      delay(1000);
+      delay(1000L);
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
-      lightTurnedOff = 0;
-      HBTimerCounter = 0;
-      if (light==0) {
-        String motionValue = String(motion_FLAG); 
-        String lightValue = String(lightMeter.readLightLevel());
-        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
-      }
-      light = 1;
+      lightTurnedOff = 0;                         // Light is detected.
+      HBTimerCounter = 0;                         // Reset HB timer. 
     } else if (lightMeter.readLightLevel()<5) {    // Light is off.
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
       lightTurnedOff = 1;
       HBTimerCounter++;
       Serial.println(HBTimerCounter);
-      if (light==1) {
-        String motionValue = String(motion_FLAG); 
-        String lightValue = String(lightMeter.readLightLevel());
-        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
-      }
-      light = 0;
     }
   }
 
@@ -168,6 +184,28 @@ void loop(){
   sleepNow();
 }
 
+/*
+ * Send for the first time the data from sensors to the server when the device is launched.
+ */
+void sendTheFirstData() {
+  if (firstMessageToServer == 0) {
+    String motionValue = String(motion_FLAG); 
+    String lightValue = String(lightMeter.readLightLevel());
+    sendUDP("P", motionValue, "L", lightValue, "H", String(1));
+    firstMessageToServer = 1;  
+  }
+}
+
+/*
+ * Send UDP message from Arduino to server.
+ * 
+ * @param sensor_1 PIR Sensor ID, ex. "P"
+ * @param value_1  value from PIR Sensor
+ * @param sensor_2 Light Sensor ID, ex. "L"
+ * @param value_2  value from Light Sensor
+ * @param sensor_3 Heartbeat ID, ex. "H"
+ * @param value_3  value for HB
+ */
 void sendUDP(String sensor_1, String value_1, String sensor_2, String value_2, String hb, String value_3) {
   String messageToServer = sensor_1 + " " + value_1 + "|" + sensor_2 + " " + value_2 + "|" + hb + " " + value_3;
   Serial.println(messageToServer);
@@ -175,7 +213,7 @@ void sendUDP(String sensor_1, String value_1, String sensor_2, String value_2, S
   Udp.print(messageToServer);
   Udp.endPacket();
   digitalWrite(lightLedPin, HIGH);
-  delay(1000);
+  delay(1000L);
   digitalWrite(lightLedPin, LOW);
 }
 
@@ -194,6 +232,11 @@ void motionWakeUp(){
   motion_FLAG = 1;
 }
 
+/*
+ * If any sensor has not changed after the period of time specified by @HBInterval, 
+ * it sends to the server a control message with the last data from sensors, showing that 
+ * the device works.
+ */
 void checkForControlSignal() {
   if(lightTurnedOff == 1 && motion_FLAG == 0 && HBTimerCounter >= HBInterval){     
     String motionValue = String(motion_FLAG); 
