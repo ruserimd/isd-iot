@@ -21,13 +21,14 @@ byte motion_FLAG = 0;
 byte lightTurnedOff = 0;
 byte HBTimerCounter = 0;
 byte firstMessageToServer = 0;
+byte lightIndicator = 0;
 
 // The MAC address and IP address for the controller. They will be dependent on local network.
 byte mac[] = { 0x90, 0xA2, 0xDA, 0x0F, 0xB6, 0x47 };
 IPAddress ip(172, 17, 41, 54);
 unsigned int localPort = 9876;
 
-IPAddress remoteIP(172, 17, 41, 71);
+IPAddress remoteIP(172, 17, 41, 87);
 unsigned int remotePort = 9876;
 
 // An EthernetUDP instance to let us send and receive packets over UDP.
@@ -110,7 +111,7 @@ void setupEthernet() {
   }
 
   // Start the Ethernet and UDP.
-  Ethernet.begin(mac,ip);
+  Ethernet.begin(mac, ip);
   Udp.begin(localPort);
 
   // Ethernet Shield IP.
@@ -127,6 +128,7 @@ void loop(){
   if (motion_FLAG == 1) {   
     if(digitalRead(pirPin) == HIGH){
      digitalWrite(motionLedPin, HIGH); // The led visualizes the sensors output pin state.
+     digitalWrite(lightLedPin, HIGH);
      
       if(lockLow){  
        lockLow = false;                 // Makes sure we wait for a transition to LOW before any further output is made.            
@@ -141,6 +143,7 @@ void loop(){
     
     if(digitalRead(pirPin) == LOW){       
      digitalWrite(motionLedPin, LOW);  // The led visualizes the sensors output pin state.
+     digitalWrite(lightLedPin, LOW);
     
      if(takeLowTime){
       lowIn = millis();          // Save the time of the transition from high to LOW.
@@ -164,19 +167,33 @@ void loop(){
 
   // Check for light detection.
   if (light_FLAG > lightTimerCounter) {
-    if (lightMeter.readLightLevel()>5) {           // Light is on.
+    if (lightMeter.readLightLevel() > 5) {           // Light is on.
       digitalWrite(lightLedPin, HIGH);
       delay(1000L);
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
       lightTurnedOff = 0;                         // Light is detected.
       HBTimerCounter = 0;                         // Reset HB timer. 
-    } else if (lightMeter.readLightLevel()<5) {    // Light is off.
+
+      if (lightIndicator == 0) {
+        String motionValue = String(motion_FLAG); 
+        String lightValue = String(lightMeter.readLightLevel());
+        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
+      }
+      lightIndicator = 1;
+    } else if (lightMeter.readLightLevel() < 5) {    // Light is off.
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
       lightTurnedOff = 1;
       HBTimerCounter++;
       Serial.println(HBTimerCounter);
+      
+      if (lightIndicator == 1) {
+        String motionValue = String(motion_FLAG); 
+        String lightValue = String(lightMeter.readLightLevel());
+        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
+      }
+      lightIndicator = 0;
     }
   }
 
