@@ -18,7 +18,6 @@ BH1750 lightMeter;
 
 byte light_FLAG = 0;
 byte motion_FLAG = 0;
-byte lightTurnedOff = 0;
 byte HBTimerCounter = 0;
 byte firstMessageToServer = 0;
 byte lightIndicator = 0;
@@ -28,7 +27,7 @@ byte mac[] = { 0x90, 0xA2, 0xDA, 0x0F, 0xB6, 0x47 };
 IPAddress ip(172, 17, 41, 54);
 unsigned int localPort = 9876;
 
-IPAddress remoteIP(172, 17, 41, 87);
+IPAddress remoteIP(172, 17, 41, 71);
 unsigned int remotePort = 9876;
 
 // An EthernetUDP instance to let us send and receive packets over UDP.
@@ -134,8 +133,7 @@ void loop(){
        lockLow = false;                 // Makes sure we wait for a transition to LOW before any further output is made.            
        String motionValue = String(motion_FLAG); 
        String lightValue = String(lightMeter.readLightLevel());
-       sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
-       HBTimerCounter = 0;             // Reset HB timer. 
+       sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
        delay(50L);
       }         
       takeLowTime = true;
@@ -159,7 +157,7 @@ void loop(){
        motion_FLAG = 0;
        String motionValue = String(motion_FLAG); 
        String lightValue = String(lightMeter.readLightLevel());
-       sendUDP("P", motionValue, "L", lightValue, "H", String(1));  
+       sendUDP("P", motionValue, "L", lightValue, "H", String(0));  
        delay(50L);
       }
     }
@@ -171,30 +169,27 @@ void loop(){
       digitalWrite(lightLedPin, HIGH);
       delay(1000L);
       digitalWrite(lightLedPin, LOW);
-      light_FLAG = 0;
-      lightTurnedOff = 0;                         // Light is detected.
-      HBTimerCounter = 0;                         // Reset HB timer. 
+      light_FLAG = 0;                       // Light is detected.
 
       if (lightIndicator == 0) {
         String motionValue = String(motion_FLAG); 
         String lightValue = String(lightMeter.readLightLevel());
-        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
+        sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
       }
       lightIndicator = 1;
     } else if (lightMeter.readLightLevel() < 5) {    // Light is off.
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
-      lightTurnedOff = 1;
-      HBTimerCounter++;
       Serial.println(HBTimerCounter);
       
       if (lightIndicator == 1) {
         String motionValue = String(motion_FLAG); 
         String lightValue = String(lightMeter.readLightLevel());
-        sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
+        sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
       }
       lightIndicator = 0;
     }
+    HBTimerCounter++;
   }
 
   checkForControlSignal();  
@@ -208,7 +203,7 @@ void sendTheFirstData() {
   if (firstMessageToServer == 0) {
     String motionValue = String(motion_FLAG); 
     String lightValue = String(lightMeter.readLightLevel());
-    sendUDP("P", motionValue, "L", lightValue, "H", String(1));
+    sendUDP("P", motionValue, "L", lightValue, "H", String(0));
     firstMessageToServer = 1;  
   }
 }
@@ -255,7 +250,7 @@ void motionWakeUp(){
  * the device works.
  */
 void checkForControlSignal() {
-  if(lightTurnedOff == 1 && motion_FLAG == 0 && HBTimerCounter >= HBInterval){     
+  if(HBTimerCounter >= HBInterval){     
     String motionValue = String(motion_FLAG); 
     String lightValue = String(lightMeter.readLightLevel());
     sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
