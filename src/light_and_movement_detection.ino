@@ -1,25 +1,23 @@
 #include <avr/sleep.h>  
-#include "TimerOne.h"
 #include "BH1750.h"
 #include <SPI.h>        
 #include <Ethernet.h>
 #include <EthernetUdp.h>
+#include "LowPower.h"
 
 #define lightLedPin 8
 #define motionLedPin 9
 #define pirPin 2
 #define pirSensorCalibrationTime 10  // Calibration time for PIR sensor, 10-60ms according to datasheet.
-#define lightTimerCounter 10         // After how many timer interruptions the led will blink. 0.5 x 10 = 5s.
-#define motionPause 5000             // The amount of milliseconds the PIR sensor has to be low 
-                                     // before we assume all motion has stopped.
-#define HBInterval 5                 // Send control message after 5 x 5s = 25s.
+#define HBInterval 2                 // Depends of SLEEP_XS parameter in the LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF) function.
+                                     // X * HBInterval = seconds after that the control message is sent.
 
 BH1750 lightMeter;
 
+byte motion_sent = 0;
 byte light_FLAG = 0;
 byte motion_FLAG = 0;
 byte HBTimerCounter = 0;
-byte firstMessageToServer = 0;
 byte lightIndicator = 0;
 
 // The MAC address and IP address for the controller. They will be dependent on local network.
@@ -27,16 +25,11 @@ byte mac[] = { 0x90, 0xA2, 0xDA, 0x0F, 0xB6, 0x47 };
 IPAddress ip(172, 17, 41, 54);
 unsigned int localPort = 9876;
 
-IPAddress remoteIP(172, 17, 41, 71);
+IPAddress remoteIP(172, 17, 41, 85);
 unsigned int remotePort = 9876;
 
 // An EthernetUDP instance to let us send and receive packets over UDP.
 EthernetUDP Udp;
-
-// The time when the PIR sensor outputs a low impulse.
-long unsigned int lowIn;     
-boolean lockLow = true;
-boolean takeLowTime;   
 
 void setup(){    
   delay(200L);
@@ -95,10 +88,6 @@ void setupPins() {
 void setupInterruptions() {
   // Set external interruption for PIR sensor.
   attachInterrupt(digitalPinToInterrupt(2), motionWakeUp, CHANGE);
-
-  // Set timer for light measurements.
-  Timer1.initialize(500000);       
-  Timer1.attachInterrupt(lightWakeUp); 
 }
 
 /*
@@ -121,66 +110,51 @@ void setupEthernet() {
 
 void loop(){    
 
-  sendTheFirstData();
-
   // Check for motion detection.
-  if (motion_FLAG == 1) {   
+  if (motion_FLAG == 1) {      
     if(digitalRead(pirPin) == HIGH){
      digitalWrite(motionLedPin, HIGH); // The led visualizes the sensors output pin state.
      digitalWrite(lightLedPin, HIGH);
-     
-      if(lockLow){  
-       lockLow = false;                 // Makes sure we wait for a transition to LOW before any further output is made.            
-       String motionValue = String(motion_FLAG); 
-       String lightValue = String(lightMeter.readLightLevel());
-       sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
-       delay(50L);
-      }         
-      takeLowTime = true;
+      if (motion_sent == 0) {
+        String motionValue = String(motion_FLAG); 
+        String lightValue = String(lightMeter.readLightLevel());
+        sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
+        motion_sent = 1;    
+      }
     }
     
     if(digitalRead(pirPin) == LOW){       
-     digitalWrite(motionLedPin, LOW);  // The led visualizes the sensors output pin state.
-     digitalWrite(lightLedPin, LOW);
-    
-     if(takeLowTime){
-      lowIn = millis();          // Save the time of the transition from high to LOW.
-      takeLowTime = false;       // Make sure this is only done at the start of a LOW phase.
-     }
-     
-     // If the sensor is low for more than the given pause, 
-     // we assume that no more motion is going to happen.
-     if(!lockLow && millis() - lowIn > motionPause) {  
-       // Makes sure this block of code is only executed again after 
-       // a new motion sequence has been detected.
-       lockLow = true;                                   
+     digitalWrite(motionLedPin, LOW); // The led visualizes the sensors output pin state.
+     digitalWrite(lightLedPin, LOW);                                 
        motion_FLAG = 0;
+       motion_sent = 0;
        String motionValue = String(motion_FLAG); 
        String lightValue = String(lightMeter.readLightLevel());
        sendUDP("P", motionValue, "L", lightValue, "H", String(0));  
-       delay(50L);
-      }
     }
   }
 
   // Check for light detection.
-  if (light_FLAG > lightTimerCounter) {
-    if (lightMeter.readLightLevel() > 5) {           // Light is on.
-      digitalWrite(lightLedPin, HIGH);
-      delay(1000L);
-      digitalWrite(lightLedPin, LOW);
-      light_FLAG = 0;                       // Light is detected.
+  if (light_FLAG == 1) {    
+    if (lightMeter.readLightLevel() > 5) { // Light is on.
+      if (motion_FLAG == 1) {
+        digitalWrite(lightLedPin, HIGH);
+      } else {
+        digitalWrite(lightLedPin, HIGH);
+        delay(1000L);
+        digitalWrite(lightLedPin, LOW);
+      }
+      light_FLAG = 0; // Light is detected.
 
       if (lightIndicator == 0) {
         String motionValue = String(motion_FLAG); 
         String lightValue = String(lightMeter.readLightLevel());
-        sendUDP("P", motionValue, "L", lightValue, "H", String(0));   
+        sendUDP("P", motionValue, "L", lightValue, "H", String(0));  
       }
       lightIndicator = 1;
-    } else if (lightMeter.readLightLevel() < 5) {    // Light is off.
+    } else if (lightMeter.readLightLevel() < 5) { // Light is off.
       digitalWrite(lightLedPin, LOW);
       light_FLAG = 0;
-      Serial.println(HBTimerCounter);
       
       if (lightIndicator == 1) {
         String motionValue = String(motion_FLAG); 
@@ -189,23 +163,11 @@ void loop(){
       }
       lightIndicator = 0;
     }
-    HBTimerCounter++;
   }
-
-  checkForControlSignal();  
-  sleepNow();
-}
-
-/*
- * Send for the first time the data from sensors to the server when the device is launched.
- */
-void sendTheFirstData() {
-  if (firstMessageToServer == 0) {
-    String motionValue = String(motion_FLAG); 
-    String lightValue = String(lightMeter.readLightLevel());
-    sendUDP("P", motionValue, "L", lightValue, "H", String(0));
-    firstMessageToServer = 1;  
-  }
+    
+    // Enter power down state for 4s with ADC and BOD module disabled
+    LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);  
+    lightWakeUp(); 
 }
 
 /*
@@ -224,21 +186,20 @@ void sendUDP(String sensor_1, String value_1, String sensor_2, String value_2, S
   Udp.beginPacket(remoteIP, remotePort);
   Udp.print(messageToServer);
   Udp.endPacket();
-  digitalWrite(lightLedPin, HIGH);
-  delay(1000L);
-  digitalWrite(lightLedPin, LOW);
 }
 
 /*
- * Increment the light_FLAG when the interruption for the LIGHT sensor was produced. 
+ * Set the light_FLAG to 1 when the interruption for the LIGHT sensor was produced. 
  */
 void lightWakeUp()
 {
-  light_FLAG++; 
+  light_FLAG = 1; 
+  HBTimerCounter++;
+  checkForControlSignal(); 
 }
 
 /*
- * Set motion_FLAG to 1 when the interruption for the PIR sensor was produced.
+ * Set the motion_FLAG to 1 when the interruption for the PIR sensor was produced.
  */
 void motionWakeUp(){
   motion_FLAG = 1;
@@ -256,19 +217,4 @@ void checkForControlSignal() {
     sendUDP("P", motionValue, "L", lightValue, "H", String(1));   
     HBTimerCounter = 0;
   }
-}
-
-/*
- * Sleep Arduino to use less power. In the Atmega8 datasheet
- * http://www.atmel.com/dyn/resources/prod_documents/doc2486.pdf on page 35
- * there is a list of sleep modes which explains which clocks and
- * wake up sources are available in which sleep mode.
- */
-void sleepNow() {  
-  set_sleep_mode(SLEEP_MODE_IDLE);                                 // Sleep mode is set here.  
-  sleep_enable();                                                  // Enables the sleep bit in the mcucr register.  
-  attachInterrupt(digitalPinToInterrupt(2), motionWakeUp, CHANGE); // Use interrupt pin 2 and run function. 
-  sleep_mode();                                                      
-  sleep_disable();                                                 // First thing after waking from sleep: disable sleep.  
-  detachInterrupt(digitalPinToInterrupt(2));                       // Disables interrupt on pin 2 so the wakeUp code will not be executed during normal running time.  
 }
