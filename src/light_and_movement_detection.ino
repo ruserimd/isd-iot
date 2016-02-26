@@ -8,7 +8,7 @@
 #define motionLedPin 9
 #define pirPin 2
 #define pirSensorCalibrationTime 10  // Calibration time for PIR sensor, 10-60ms according to datasheet.
-int HBInterval = 2;                  // Depends of SLEEP_XS parameter in the LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF) function.
+float HBInterval = 2;                  // Depends of SLEEP_XS parameter in the LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF) function.
                                      // X * HBInterval = seconds after that the control message is sent.
 
 BH1750 lightMeter;
@@ -27,9 +27,6 @@ unsigned int localPort = 9876;
 // The IP address and the port of the server.
 IPAddress remoteIP(172, 17, 41, 85);
 unsigned int remotePort = 9876;
-
-// Buffer to hold incoming packet from the network.
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; 
 
 // An EthernetUDP instance to let us send and receive packets over UDP.
 EthernetUDP Udp;
@@ -192,8 +189,10 @@ void sendUDP(String sensor_1, String value_1, String sensor_2, String value_2, S
  */
 void sendOK() {
   Udp.beginPacket(remoteIP, remotePort);
-  Udp.print(1);
+  String okMessage = "HBF 1";
+  Udp.print(okMessage);
   Udp.endPacket();
+  Serial.println("OK");
 }
 
 /*
@@ -228,11 +227,14 @@ void checkForControlSignal() {
  * Read the incoming message from network and send back an OK message.
  */
 void readUDP() {
+  // Buffer to hold incoming packet from the network.
+  char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; 
+  
   int packetSize = Udp.parsePacket();
   if(packetSize) {
-    Udp.read(packetBuffer,UDP_TX_PACKET_MAX_SIZE); // Read the packet into packetBufffer.
-    HBInterval = atoi(&packetBuffer[0]);           // Set the incomming data to @HBInterval.
-  
+    Udp.read(packetBuffer,UDP_TX_PACKET_MAX_SIZE);         // Read the packet into packetBufffer.
+    int valueFromTheServer = atoi(&packetBuffer[0]);       // Set the incomming data to @HBInterval.
+    HBInterval = valueFromTheServer / 4;
     sendOK(); 
   }
 }
